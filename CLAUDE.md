@@ -9,24 +9,24 @@ Key insight: **we cannot know the full supply chain**. So we use adversarial LLM
 ## Pipeline overview
 
 ```
-01-seed       → input company/product → root node in Neo4j
-02-discover   → web search (SearXNG + Browserless) → raw supplier claims
-03-challenge  → prosecution / defense / judge LLM loop → confidence score per claim
-04-ingest     → claims above threshold → Neo4j nodes + edges
-05-expand     → traverse graph tier by tier (SUPPLIES*1..N) → queue next tier
-06-enrich     → sanctions (OFAC), certifications, ESG flags, news → enrich nodes
-07-report     → weekly supply chain summary → Gitea
+01-seed       → input company/product → root node in Neo4j + seed expand_queue
+02-discover   → claim expand_queue → SearXNG + Browserless scrape → raw claims in PG
+03-challenge  → pending claims → prosecution (Cohere) / defense (Llama) / judge (DeepSeek R1) → confidence score
+04-ingest     → accepted claims → Neo4j MERGE nodes+edges → queue object company at next tier → trigger 02
+05-watchdog   → every 30 min → reset stuck queue items + orphan claims → log pipeline health
+06-enrich     → daily → enrich Neo4j company nodes with sanctions/ESG/cert data (Mistral)
+07-report     → weekly → dark-theme HTML + MD report → Gitea + GitHub
 ```
 
 EDRM mapping:
 - **Identification** → 01-seed + 02-discover
-- **Preservation** → PostgreSQL `supply_chain_claims` table (raw + scored)
+- **Preservation** → PostgreSQL `claims` table (raw + scored + audit trail)
 - **Collection** → 02-discover (web), 06-enrich (APIs)
-- **Processing** → 03-challenge (LLM extraction + validation)
-- **Review** → 03-challenge (adversarial models)
-- **Analysis** → 05-expand (graph traversal)
+- **Processing** → 03-challenge (LLM extraction + adversarial validation)
+- **Review** → 03-challenge (prosecution/defense/judge pattern)
+- **Analysis** → 04-ingest tier expansion (SUPPLIES*1..3)
 - **Production** → 07-report
-- **Presentation** → Neo4j Browser / Superset dashboard
+- **Presentation** → Neo4j Browser / Gitea reports / GitHub SupplyLens repo
 
 ## Infrastructure
 
@@ -44,7 +44,16 @@ All services are on the internal network (VPN required).
 | Graphiti | 10.0.1.124 | 8000 | Temporal memory (supplier state changes) |
 | Gitea | 10.0.2.200 | 3000 | Output repo |
 
-**LLM**: Only use free models via LiteLLM. Default: `gpt-oss-120b`. Never use paid Anthropic/Gemini/etc.
+**LLM**: Direct OpenRouter calls — 5 separate keys, each wired to a specific role:
+| Role | Model | Config key |
+|------|-------|-----------|
+| Extractor (02) | `google/gemini-2.0-flash-exp:free` | `extract_key` |
+| Prosecutor (03) | `cohere/command-r7b-12-2024:free` | `prosecutor_key` |
+| Defender (03) | `meta-llama/llama-3.3-70b-instruct:free` | `defender_key` |
+| Judge (03) | `deepseek/deepseek-r1:free` | `judge_key` |
+| Enricher (06) | `mistralai/mistral-7b-instruct:free` | `enrich_key` |
+
+All keys in KeePass → SupplyLens → OpenRouter keys. All `:free` tier only — never use paid models.
 
 **Neo4j credentials**: in KeePass → Infrastructure → Neo4j (CT114). Also in `/root/.credentials/neo4j.txt` on CT114.
 
