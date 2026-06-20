@@ -2,12 +2,24 @@
   "name": "supplylens: 06 Enrich",
   "nodes": [
     {
-      "parameters": {"rule": {"interval": [{"field": "hours", "intervalValue": 24}]}},
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "intervalValue": 24
+            }
+          ]
+        }
+      },
       "id": "schedule-trigger",
       "name": "Daily",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
-      "position": [0, 0]
+      "position": [
+        0,
+        0
+      ]
     },
     {
       "parameters": {},
@@ -15,7 +27,10 @@
       "name": "Manual Trigger",
       "type": "n8n-nodes-base.manualTrigger",
       "typeVersion": 1,
-      "position": [0, 160]
+      "position": [
+        0,
+        160
+      ]
     },
     {
       "parameters": {
@@ -27,18 +42,29 @@
       "name": "Fetch Config",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
-      "position": [220, 80],
-      "credentials": {"postgres": {"id": "POSTGRES_CREDENTIAL_ID", "name": "supplylens-pg"}}
+      "position": [
+        220,
+        80
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "POSTGRES_CREDENTIAL_ID",
+          "name": "supplylens-pg"
+        }
+      }
     },
     {
       "parameters": {
-        "jsCode": "const rows = $input.all();\nconst config = {};\nfor (const r of rows) config[r.json.key] = r.json.value;\nreturn [{ json: { config } }];"
+        "jsCode": "const rows = $input.all();\nconst config = {};\nfor (const r of rows) config[r.json.key] = r.json.value;\nconst neo4j_auth = 'Basic ' + Buffer.from(config.neo4j_user + ':' + config.neo4j_password).toString('base64');\nreturn [{ json: { config, neo4j_auth } }];"
       },
       "id": "build-config",
       "name": "Build Config Map",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [440, 80]
+      "position": [
+        440,
+        80
+      ]
     },
     {
       "parameters": {
@@ -47,23 +73,37 @@
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
-            {"name": "Authorization", "value": "=Basic {{ Buffer.from($json.config.neo4j_user + ':' + $json.config.neo4j_password).toString('base64') }}"},
-            {"name": "Content-Type", "value": "application/json"}
+            {
+              "name": "Authorization",
+              "value": "={{ $json.neo4j_auth }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
           ]
         },
         "sendBody": true,
         "bodyParameters": {
           "parameters": [
-            {"name": "statements", "value": "={{ [{\"statement\": \"MATCH (c:Company) WHERE c.last_enriched IS NULL OR c.last_enriched < datetime() - duration('P7D') RETURN c.name as name, c.country as country ORDER BY c.created_at ASC LIMIT 20\"}] }}"}
+            {
+              "name": "statements",
+              "value": "={{ [{\"statement\": \"MATCH (c:Company) WHERE c.last_enriched IS NULL OR c.last_enriched < datetime() - duration('P7D') RETURN c.name as name, c.country as country ORDER BY c.created_at ASC LIMIT 20\"}] }}"
+            }
           ]
         },
-        "options": {"timeout": 15000}
+        "options": {
+          "timeout": 15000
+        }
       },
       "id": "fetch-companies",
       "name": "Fetch Companies to Enrich",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [660, 80]
+      "position": [
+        660,
+        80
+      ]
     },
     {
       "parameters": {
@@ -73,7 +113,10 @@
       "name": "Parse Companies",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [880, 80]
+      "position": [
+        880,
+        80
+      ]
     },
     {
       "parameters": {
@@ -82,20 +125,37 @@
         "sendQuery": true,
         "queryParameters": {
           "parameters": [
-            {"name": "q", "value": "={{ '\"' + $json.name + '\" sanctions OR OFAC OR controversy OR fine OR labor OR ESG' }}"},
-            {"name": "format", "value": "json"},
-            {"name": "engines", "value": "google,bing"},
-            {"name": "language", "value": "en"}
+            {
+              "name": "q",
+              "value": "={{ '\"' + $json.name + '\" sanctions OR OFAC OR controversy OR fine OR labor OR ESG' }}"
+            },
+            {
+              "name": "format",
+              "value": "json"
+            },
+            {
+              "name": "engines",
+              "value": "google,bing"
+            },
+            {
+              "name": "language",
+              "value": "en"
+            }
           ]
         },
-        "options": {"timeout": 15000},
+        "options": {
+          "timeout": 15000
+        },
         "onError": "continueRegularOutput"
       },
       "id": "enrich-search",
       "name": "Enrich Search",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [1100, 80]
+      "position": [
+        1100,
+        80
+      ]
     },
     {
       "parameters": {
@@ -105,7 +165,10 @@
       "name": "Build Enrich Prompt",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1320, 80]
+      "position": [
+        1320,
+        80
+      ]
     },
     {
       "parameters": {
@@ -114,29 +177,58 @@
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
-            {"name": "Authorization", "value": "=Bearer {{ $json.config.enrich_key }}"},
-            {"name": "Content-Type", "value": "application/json"},
-            {"name": "HTTP-Referer", "value": "https://supplylens.xyz"},
-            {"name": "X-Title", "value": "SupplyLens-Enrich"}
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.config.enrich_key }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "HTTP-Referer",
+              "value": "https://supplylens.xyz"
+            },
+            {
+              "name": "X-Title",
+              "value": "SupplyLens-Enrich"
+            }
           ]
         },
         "sendBody": true,
         "bodyParameters": {
           "parameters": [
-            {"name": "model", "value": "={{ $json.config.enrich_model }}"},
-            {"name": "messages", "value": "={{ [{\"role\": \"user\", \"content\": $json.prompt}] }}"},
-            {"name": "temperature", "value": 0.1},
-            {"name": "max_tokens", "value": 600}
+            {
+              "name": "model",
+              "value": "={{ $json.config.enrich_model }}"
+            },
+            {
+              "name": "messages",
+              "value": "={{ [{\"role\": \"user\", \"content\": $json.prompt}] }}"
+            },
+            {
+              "name": "temperature",
+              "value": 0.1
+            },
+            {
+              "name": "max_tokens",
+              "value": 600
+            }
           ]
         },
-        "options": {"timeout": 60000},
+        "options": {
+          "timeout": 60000
+        },
         "onError": "continueRegularOutput"
       },
       "id": "enrich-llm",
       "name": "Enrich LLM (Mistral)",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [1540, 80],
+      "position": [
+        1540,
+        80
+      ],
       "retryOnFail": true,
       "maxTries": 2,
       "waitBetweenTries": 10000
@@ -149,7 +241,10 @@
       "name": "Build Neo4j Update",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1760, 80]
+      "position": [
+        1760,
+        80
+      ]
     },
     {
       "parameters": {
@@ -158,39 +253,157 @@
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
-            {"name": "Authorization", "value": "=Basic {{ $json.auth }}"},
-            {"name": "Content-Type", "value": "application/json"}
+            {
+              "name": "Authorization",
+              "value": "=Basic {{ $json.auth }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
           ]
         },
         "sendBody": true,
         "bodyParameters": {
           "parameters": [
-            {"name": "statements", "value": "={{ [{\"statement\": $json.cypher, \"parameters\": $json.params}] }}"}
+            {
+              "name": "statements",
+              "value": "={{ [{\"statement\": $json.cypher, \"parameters\": $json.params}] }}"
+            }
           ]
         },
-        "options": {"timeout": 15000},
+        "options": {
+          "timeout": 15000
+        },
         "onError": "continueRegularOutput"
       },
       "id": "update-neo4j",
       "name": "Update Neo4j Node",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [1980, 80]
+      "position": [
+        1980,
+        80
+      ]
     }
   ],
   "connections": {
-    "Daily": {"main": [[{"node": "Fetch Config", "type": "main", "index": 0}]]},
-    "Manual Trigger": {"main": [[{"node": "Fetch Config", "type": "main", "index": 0}]]},
-    "Fetch Config": {"main": [[{"node": "Build Config Map", "type": "main", "index": 0}]]},
-    "Build Config Map": {"main": [[{"node": "Fetch Companies to Enrich", "type": "main", "index": 0}]]},
-    "Fetch Companies to Enrich": {"main": [[{"node": "Parse Companies", "type": "main", "index": 0}]]},
-    "Parse Companies": {"main": [[{"node": "Enrich Search", "type": "main", "index": 0}]]},
-    "Enrich Search": {"main": [[{"node": "Build Enrich Prompt", "type": "main", "index": 0}]]},
-    "Build Enrich Prompt": {"main": [[{"node": "Enrich LLM (Mistral)", "type": "main", "index": 0}]]},
-    "Enrich LLM (Mistral)": {"main": [[{"node": "Build Neo4j Update", "type": "main", "index": 0}]]},
-    "Build Neo4j Update": {"main": [[{"node": "Update Neo4j Node", "type": "main", "index": 0}]]}
+    "Daily": {
+      "main": [
+        [
+          {
+            "node": "Fetch Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Fetch Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Config": {
+      "main": [
+        [
+          {
+            "node": "Build Config Map",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Config Map": {
+      "main": [
+        [
+          {
+            "node": "Fetch Companies to Enrich",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Companies to Enrich": {
+      "main": [
+        [
+          {
+            "node": "Parse Companies",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Companies": {
+      "main": [
+        [
+          {
+            "node": "Enrich Search",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enrich Search": {
+      "main": [
+        [
+          {
+            "node": "Build Enrich Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Enrich Prompt": {
+      "main": [
+        [
+          {
+            "node": "Enrich LLM (Mistral)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enrich LLM (Mistral)": {
+      "main": [
+        [
+          {
+            "node": "Build Neo4j Update",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Neo4j Update": {
+      "main": [
+        [
+          {
+            "node": "Update Neo4j Node",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
   },
-  "settings": {"executionOrder": "v1"},
-  "tags": ["supplylens"],
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": [
+    "supplylens"
+  ],
   "notes": "Pipeline 06: Enrich\n- Daily: find companies not enriched in last 7 days\n- SearXNG search for sanctions, ESG, certifications\n- Mistral 7B extracts structured risk data\n- Updates Neo4j node: risk_flags, certifications, sanctions_hit, risk_level"
 }

@@ -7,7 +7,10 @@
       "name": "Manual Trigger",
       "type": "n8n-nodes-base.manualTrigger",
       "typeVersion": 1,
-      "position": [0, 0]
+      "position": [
+        0,
+        0
+      ]
     },
     {
       "parameters": {
@@ -19,18 +22,29 @@
       "name": "Fetch Config",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
-      "position": [220, 0],
-      "credentials": {"postgres": {"id": "POSTGRES_CREDENTIAL_ID", "name": "supplylens-pg"}}
+      "position": [
+        220,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "POSTGRES_CREDENTIAL_ID",
+          "name": "supplylens-pg"
+        }
+      }
     },
     {
       "parameters": {
-        "jsCode": "const rows = $input.all();\nconst config = {};\nfor (const r of rows) config[r.json.key] = r.json.value;\nconst inp = $('Manual Trigger').first().json;\nconst company = inp.company || inp.body?.company || 'Unknown Company';\nconst country = inp.country || inp.body?.country || 'unknown';\nreturn [{ json: { config, company, country } }];"
+        "jsCode": "const rows = $input.all();\nconst config = {};\nfor (const r of rows) config[r.json.key] = r.json.value;\nconst inp = $('Manual Trigger').first().json;\n// Fall back to seed values in pipeline_config if manual trigger has no data\nconst company = inp.company || inp.body?.company || config.seed_company || 'Unknown Company';\nconst country = inp.country || inp.body?.country || config.seed_country || 'unknown';\nconst neo4j_auth = 'Basic ' + Buffer.from(config.neo4j_user + ':' + config.neo4j_password).toString('base64');\n// Pre-build Neo4j statement arrays to avoid $param conflicts in expressions\nconst check_stmts = [{\n  statement: 'MATCH (c:Company {name: $name}) RETURN c.name as name',\n  parameters: { name: company }\n}];\nconst create_stmts = [{\n  statement: 'MERGE (c:Company {name: $name}) SET c.country = $country, c.confidence = 1.0, c.seed = true, c.tier = 0, c.created_at = datetime() RETURN c.name as name',\n  parameters: { name: company, country: country }\n}];\nreturn [{ json: { config, company, country, neo4j_auth, check_stmts, create_stmts } }];"
       },
       "id": "build-config",
       "name": "Build Config",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [440, 0]
+      "position": [
+        440,
+        0
+      ]
     },
     {
       "parameters": {
@@ -39,24 +53,38 @@
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
-            {"name": "Authorization", "value": "=Basic {{ Buffer.from($json.config.neo4j_user + ':' + $json.config.neo4j_password).toString('base64') }}"},
-            {"name": "Content-Type", "value": "application/json"}
+            {
+              "name": "Authorization",
+              "value": "={{ $json.neo4j_auth }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
           ]
         },
         "sendBody": true,
         "bodyParameters": {
           "parameters": [
-            {"name": "statements", "value": "={{ [{\"statement\": \"MATCH (c:Company {name: $name}) RETURN c.name as name\", \"parameters\": {\"name\": $json.company}}] }}"}
+            {
+              "name": "statements",
+              "value": "={{ $json.check_stmts }}"
+            }
           ]
         },
-        "options": {"timeout": 10000},
+        "options": {
+          "timeout": 10000
+        },
         "onError": "continueRegularOutput"
       },
       "id": "check-exists",
       "name": "Check Neo4j Exists",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [660, 0]
+      "position": [
+        660,
+        0
+      ]
     },
     {
       "parameters": {
@@ -66,13 +94,30 @@
       "name": "Parse Exists Check",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [880, 0]
+      "position": [
+        880,
+        0
+      ]
     },
     {
       "parameters": {
         "conditions": {
-          "options": {"caseSensitive": true, "leftValue": "", "typeValidation": "loose"},
-          "conditions": [{"id": "not-exists", "leftValue": "={{ $json.already_exists !== true }}", "rightValue": true, "operator": {"type": "boolean", "operation": "equals"}}],
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "not-exists",
+              "leftValue": "={{ $json.already_exists !== true }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
           "combinator": "and"
         }
       },
@@ -80,7 +125,10 @@
       "name": "Is New?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
-      "position": [1100, 0]
+      "position": [
+        1100,
+        0
+      ]
     },
     {
       "parameters": {
@@ -89,47 +137,60 @@
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
-            {"name": "Authorization", "value": "=Basic {{ Buffer.from($('Build Config').first().json.config.neo4j_user + ':' + $('Build Config').first().json.config.neo4j_password).toString('base64') }}"},
-            {"name": "Content-Type", "value": "application/json"}
+            {
+              "name": "Authorization",
+              "value": "={{ $('Build Config').first().json.neo4j_auth }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
           ]
         },
         "sendBody": true,
         "bodyParameters": {
           "parameters": [
-            {"name": "statements", "value": "={{ [{\"statement\": \"MERGE (c:Company {name: $name}) SET c.country = $country, c.confidence = 1.0, c.seed = true, c.tier = 0, c.created_at = datetime() RETURN c.name as name\", \"parameters\": {\"name\": $json.company, \"country\": $json.country}}] }}"}
+            {
+              "name": "statements",
+              "value": "={{ $('Build Config').first().json.create_stmts }}"
+            }
           ]
         },
-        "options": {"timeout": 10000}
+        "options": {
+          "timeout": 10000
+        }
       },
       "id": "create-node",
       "name": "Create Root Node",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [1320, -80]
+      "position": [
+        1320,
+        -80
+      ]
     },
     {
       "parameters": {
         "operation": "executeQuery",
         "query": "INSERT INTO expand_queue (company_name, country, tier, status) VALUES ($1, $2, 0, 'queued') ON CONFLICT (company_name, tier) DO NOTHING",
-        "additionalFields": {"queryParams": "={{ [$('Parse Exists Check').first().json.company, $('Parse Exists Check').first().json.country] }}"}
+        "options": {
+          "queryReplacement": "={{ [$('Build Config').first().json.company, $('Build Config').first().json.country] }}"
+        }
       },
       "id": "queue-company",
       "name": "Add to Expand Queue",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
-      "position": [1540, -80],
-      "credentials": {"postgres": {"id": "POSTGRES_CREDENTIAL_ID", "name": "supplylens-pg"}}
-    },
-    {
-      "parameters": {
-        "workflowId": "DISCOVER_WORKFLOW_ID",
-        "options": {}
-      },
-      "id": "trigger-discover",
-      "name": "Trigger Discover",
-      "type": "n8n-nodes-base.executeWorkflow",
-      "typeVersion": 1,
-      "position": [1760, -80]
+      "position": [
+        1540,
+        -80
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "POSTGRES_CREDENTIAL_ID",
+          "name": "supplylens-pg"
+        }
+      }
     },
     {
       "parameters": {
@@ -139,23 +200,113 @@
       "name": "Log Skip",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1320, 80]
+      "position": [
+        1320,
+        80
+      ]
     }
   ],
   "connections": {
-    "Manual Trigger": {"main": [[{"node": "Fetch Config", "type": "main", "index": 0}]]},
-    "Fetch Config": {"main": [[{"node": "Build Config", "type": "main", "index": 0}]]},
-    "Build Config": {"main": [[{"node": "Check Neo4j Exists", "type": "main", "index": 0}]]},
-    "Check Neo4j Exists": {"main": [[{"node": "Parse Exists Check", "type": "main", "index": 0}]]},
-    "Parse Exists Check": {"main": [[{"node": "Is New?", "type": "main", "index": 0}]]},
-    "Is New?": {"main": [
-      [{"node": "Create Root Node", "type": "main", "index": 0}],
-      [{"node": "Log Skip", "type": "main", "index": 0}]
-    ]},
-    "Create Root Node": {"main": [[{"node": "Add to Expand Queue", "type": "main", "index": 0}]]},
-    "Add to Expand Queue": {"main": [[{"node": "Trigger Discover", "type": "main", "index": 0}]]}
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Fetch Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Config": {
+      "main": [
+        [
+          {
+            "node": "Build Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Config": {
+      "main": [
+        [
+          {
+            "node": "Check Neo4j Exists",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Neo4j Exists": {
+      "main": [
+        [
+          {
+            "node": "Parse Exists Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Exists Check": {
+      "main": [
+        [
+          {
+            "node": "Is New?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is New?": {
+      "main": [
+        [
+          {
+            "node": "Create Root Node",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Skip",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Root Node": {
+      "main": [
+        [
+          {
+            "node": "Add to Expand Queue",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
   },
-  "settings": {"executionOrder": "v1"},
-  "tags": ["supplylens"],
-  "notes": "Pipeline 01: Seed\n- Manual trigger: {company, country}\n- Creates root :Company node in Neo4j with confidence=1.0 (known seed)\n- Adds to expand_queue tier=0\n- Triggers 02-discover\n- Skips if company already exists"
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": [
+    "supplylens"
+  ],
+  "notes": "Pipeline 01: Seed\n- Manual trigger: {company, country}\n- Creates root :Company node in Neo4j with confidence=1.0 (known seed)\n- Adds to expand_queue tier=0\n- Triggers 02-discover\n- Skips if company already exists",
+  "pinData": {
+    "Manual Trigger": [
+      {
+        "json": {
+          "company": "KnopenKoning",
+          "country": "NL"
+        }
+      }
+    ]
+  }
 }

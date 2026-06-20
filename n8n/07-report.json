@@ -2,12 +2,27 @@
   "name": "supplylens: 07 Report",
   "nodes": [
     {
-      "parameters": {"rule": {"interval": [{"field": "weeks", "triggerAtDay": [0], "triggerAtHour": 8}]}},
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "weeks",
+              "triggerAtDay": [
+                0
+              ],
+              "triggerAtHour": 8
+            }
+          ]
+        }
+      },
       "id": "schedule-trigger",
       "name": "Weekly Sunday 08:00",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
-      "position": [0, 0]
+      "position": [
+        0,
+        0
+      ]
     },
     {
       "parameters": {},
@@ -15,7 +30,10 @@
       "name": "Manual Trigger",
       "type": "n8n-nodes-base.manualTrigger",
       "typeVersion": 1,
-      "position": [0, 160]
+      "position": [
+        0,
+        160
+      ]
     },
     {
       "parameters": {
@@ -27,18 +45,29 @@
       "name": "Fetch Config",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
-      "position": [220, 80],
-      "credentials": {"postgres": {"id": "POSTGRES_CREDENTIAL_ID", "name": "supplylens-pg"}}
+      "position": [
+        220,
+        80
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "POSTGRES_CREDENTIAL_ID",
+          "name": "supplylens-pg"
+        }
+      }
     },
     {
       "parameters": {
-        "jsCode": "const rows = $input.all();\nconst config = {};\nfor (const r of rows) config[r.json.key] = r.json.value;\nreturn [{ json: { config } }];"
+        "jsCode": "const rows = $input.all();\nconst config = {};\nfor (const r of rows) config[r.json.key] = r.json.value;\nconst neo4j_auth = 'Basic ' + Buffer.from(config.neo4j_user + ':' + config.neo4j_password).toString('base64');\nreturn [{ json: { config, neo4j_auth } }];"
       },
       "id": "build-config",
       "name": "Build Config Map",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [440, 80]
+      "position": [
+        440,
+        80
+      ]
     },
     {
       "parameters": {
@@ -47,23 +76,37 @@
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
-            {"name": "Authorization", "value": "=Basic {{ Buffer.from($json.config.neo4j_user + ':' + $json.config.neo4j_password).toString('base64') }}"},
-            {"name": "Content-Type", "value": "application/json"}
+            {
+              "name": "Authorization",
+              "value": "={{ $json.neo4j_auth }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
           ]
         },
         "sendBody": true,
         "bodyParameters": {
           "parameters": [
-            {"name": "statements", "value": "={{ [\n  {\"statement\": \"MATCH (c:Company) RETURN count(c) as total_companies\"},\n  {\"statement\": \"MATCH ()-[r]->() RETURN type(r) as rel_type, count(r) as count ORDER BY count DESC\"},\n  {\"statement\": \"MATCH (c:Company) WHERE c.sanctions_hit = true RETURN c.name as name, c.country as country, c.risk_level as risk_level\"},\n  {\"statement\": \"MATCH (c:Company)-[r]->() WITH c, count(r) as connections ORDER BY connections DESC LIMIT 10 RETURN c.name as name, c.country as country, c.confidence as confidence, connections\"},\n  {\"statement\": \"MATCH (c:Company) WHERE c.confidence IS NOT NULL AND c.confidence < 0.6 RETURN count(c) as uncertain_count\"},\n  {\"statement\": \"MATCH (c:Company) WHERE c.tier IS NOT NULL RETURN c.tier as tier, count(c) as count ORDER BY tier\"}\n] }}"}
+            {
+              "name": "statements",
+              "value": "={{ [\n  {\"statement\": \"MATCH (c:Company) RETURN count(c) as total_companies\"},\n  {\"statement\": \"MATCH ()-[r]->() RETURN type(r) as rel_type, count(r) as count ORDER BY count DESC\"},\n  {\"statement\": \"MATCH (c:Company) WHERE c.sanctions_hit = true RETURN c.name as name, c.country as country, c.risk_level as risk_level\"},\n  {\"statement\": \"MATCH (c:Company)-[r]->() WITH c, count(r) as connections ORDER BY connections DESC LIMIT 10 RETURN c.name as name, c.country as country, c.confidence as confidence, connections\"},\n  {\"statement\": \"MATCH (c:Company) WHERE c.confidence IS NOT NULL AND c.confidence < 0.6 RETURN count(c) as uncertain_count\"},\n  {\"statement\": \"MATCH (c:Company) WHERE c.tier IS NOT NULL RETURN c.tier as tier, count(c) as count ORDER BY tier\"}\n] }}"
+            }
           ]
         },
-        "options": {"timeout": 30000}
+        "options": {
+          "timeout": 30000
+        }
       },
       "id": "neo4j-stats",
       "name": "Fetch Graph Stats",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [660, 80]
+      "position": [
+        660,
+        80
+      ]
     },
     {
       "parameters": {
@@ -75,18 +118,29 @@
       "name": "Fetch PG Stats",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
-      "position": [880, 80],
-      "credentials": {"postgres": {"id": "POSTGRES_CREDENTIAL_ID", "name": "supplylens-pg"}}
+      "position": [
+        880,
+        80
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "POSTGRES_CREDENTIAL_ID",
+          "name": "supplylens-pg"
+        }
+      }
     },
     {
       "parameters": {
-        "jsCode": "const neo4j_resp = $('Fetch Graph Stats').first().json;\nconst pg = $('Fetch PG Stats').first().json;\nconst date = new Date().toISOString().split('T')[0];\n\nconst results = neo4j_resp?.results || [];\nconst total_companies = results[0]?.data?.[0]?.row?.[0] || 0;\nconst rel_types = (results[1]?.data || []).map(d => ({ type: d.row[0], count: d.row[1] }));\nconst sanctioned = (results[2]?.data || []).map(d => ({ name: d.row[0], country: d.row[1], risk: d.row[2] }));\nconst top_nodes = (results[3]?.data || []).map(d => ({ name: d.row[0], country: d.row[1], confidence: d.row[2], connections: d.row[3] }));\nconst uncertain_count = results[4]?.data?.[0]?.row?.[0] || 0;\nconst by_tier = (results[5]?.data || []).map(d => ({ tier: d.row[0], count: d.row[1] }));\n\nconst rel_summary = rel_types.map(r => `${r.type}: ${r.count}`).join(', ');\nconst tier_summary = by_tier.map(t => `Tier ${t.tier}: ${t.count}`).join(' | ');\n\nconst top_nodes_rows = top_nodes.map(n => {\n  const conf_color = n.confidence >= 0.8 ? '#22c55e' : n.confidence >= 0.6 ? '#f59e0b' : '#ef4444';\n  return `<tr><td>${n.name}</td><td>${n.country || '?'}</td><td><span style=\"color:${conf_color}\">${(n.confidence || 0).toFixed(2)}</span></td><td>${n.connections}</td></tr>`;\n}).join('');\n\nconst sanctioned_rows = sanctioned.map(s => `<tr><td style=\"color:#ef4444;font-weight:bold\">${s.name}</td><td>${s.country || '?'}</td><td>${s.risk || '?'}</td></tr>`).join('');\n\nconst html = `<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"UTF-8\"><title>SupplyLens Report ${date}</title><style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:system-ui,sans-serif;background:#0f172a;color:#e2e8f0;padding:24px}h1{font-size:22px;font-weight:700;color:#60a5fa;margin-bottom:4px}h2{font-size:13px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:#94a3b8;margin:20px 0 10px}.date{color:#64748b;font-size:13px;margin-bottom:24px}.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:12px;margin-bottom:24px}.card{background:#1e293b;border-radius:10px;padding:16px;border:1px solid #334155}.card .num{font-size:28px;font-weight:700}.card .lbl{font-size:11px;color:#64748b;margin-top:2px}table{width:100%;border-collapse:collapse;background:#1e293b;border-radius:10px;border:1px solid #334155;overflow:hidden}th{background:#0f172a;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;padding:8px 12px;text-align:left;color:#94a3b8}td{padding:8px 12px;font-size:13px;border-top:1px solid #1e293b}.section{margin-bottom:24px}</style></head><body><h1>SupplyLens — Supply Chain Graph Report</h1><div class=\"date\">${date} — KnopenKoning</div><div class=\"cards\"><div class=\"card\"><div class=\"num\" style=\"color:#60a5fa\">${total_companies}</div><div class=\"lbl\">Companies mapped</div></div><div class=\"card\"><div class=\"num\" style=\"color:#f59e0b\">${uncertain_count}</div><div class=\"lbl\">Low confidence (&lt;0.60)</div></div><div class=\"card\"><div class=\"num\" style=\"color:#ef4444\">${sanctioned.length}</div><div class=\"lbl\">Sanctions hits</div></div><div class=\"card\"><div class=\"num\" style=\"color:#22c55e\">${pg.accepted || 0}</div><div class=\"lbl\">Claims accepted</div></div><div class=\"card\"><div class=\"num\">${pg.contested || 0}</div><div class=\"lbl\">Contested claims</div></div><div class=\"card\"><div class=\"num\">${pg.avg_confidence || '—'}</div><div class=\"lbl\">Avg confidence</div></div></div><div class=\"section\"><h2>Tier Distribution</h2><p style=\"color:#94a3b8;font-size:13px;margin-top:8px\">${tier_summary || 'No tiers yet'}</p></div><div class=\"section\"><h2>Relationship Types</h2><p style=\"color:#94a3b8;font-size:13px;margin-top:8px\">${rel_summary || 'None yet'}</p></div>${sanctioned.length > 0 ? `<div class=\"section\"><h2 style=\"color:#ef4444\">Sanctions Alerts</h2><table><tr><th>Company</th><th>Country</th><th>Risk Level</th></tr>${sanctioned_rows}</table></div>` : ''}<div class=\"section\"><h2>Most Connected Nodes (Hub Companies)</h2><table><tr><th>Company</th><th>Country</th><th>Confidence</th><th>Connections</th></tr>${top_nodes_rows || '<tr><td colspan=\"4\" style=\"color:#64748b\">No data yet</td></tr>'}</table></div></body></html>`;\n\nconst md = `# SupplyLens Weekly Report — ${date}\\n\\n**Companies mapped:** ${total_companies} | **Sanctions hits:** ${sanctioned.length} | **Avg confidence:** ${pg.avg_confidence || 'n/a'}\\n\\n## Tier Distribution\\n${tier_summary || 'No data'}\\n\\n## Claims Pipeline\\n- Accepted: ${pg.accepted} | Rejected: ${pg.rejected} | Needs review: ${pg.needs_review} | Pending: ${pg.pending}\\n- Contested: ${pg.contested}\\n\\n## Top Hub Companies\\n| Company | Country | Confidence | Connections |\\n|---------|---------|-----------|------------|\\n${top_nodes.map(n => `| ${n.name} | ${n.country || '?'} | ${(n.confidence||0).toFixed(2)} | ${n.connections} |`).join('\\n')}\\n\\n${sanctioned.length > 0 ? `## Sanctions Alerts\\n${sanctioned.map(s => `- **${s.name}** (${s.country}) — ${s.risk}`).join('\\n')}` : ''}`;\n\nreturn [{ json: { html, md, date } }];"
+        "jsCode": "const neo4j_resp = $('Fetch Graph Stats').first().json;\nconst pg = $('Fetch PG Stats').first().json;\nconst date = new Date().toISOString().split('T')[0];\n\nconst results = neo4j_resp?.results || [];\nconst total_companies = results[0]?.data?.[0]?.row?.[0] || 0;\nconst rel_types = (results[1]?.data || []).map(d => ({ type: d.row[0], count: d.row[1] }));\nconst sanctioned = (results[2]?.data || []).map(d => ({ name: d.row[0], country: d.row[1], risk: d.row[2] }));\nconst top_nodes = (results[3]?.data || []).map(d => ({ name: d.row[0], country: d.row[1], confidence: d.row[2], connections: d.row[3] }));\nconst uncertain_count = results[4]?.data?.[0]?.row?.[0] || 0;\nconst by_tier = (results[5]?.data || []).map(d => ({ tier: d.row[0], count: d.row[1] }));\n\nconst rel_summary = rel_types.map(r => `${r.type}: ${r.count}`).join(', ');\nconst tier_summary = by_tier.map(t => `Tier ${t.tier}: ${t.count}`).join(' | ');\n\nconst top_nodes_rows = top_nodes.map(n => {\n  const conf_color = n.confidence >= 0.8 ? '#22c55e' : n.confidence >= 0.6 ? '#f59e0b' : '#ef4444';\n  return `<tr><td>${n.name}</td><td>${n.country || '?'}</td><td><span style=\"color:${conf_color}\">${(n.confidence || 0).toFixed(2)}</span></td><td>${n.connections}</td></tr>`;\n}).join('');\n\nconst sanctioned_rows = sanctioned.map(s => `<tr><td style=\"color:#ef4444;font-weight:bold\">${s.name}</td><td>${s.country || '?'}</td><td>${s.risk || '?'}</td></tr>`).join('');\n\nconst html = `<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"UTF-8\"><title>SupplyLens Report ${date}</title><style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:system-ui,sans-serif;background:#0f172a;color:#e2e8f0;padding:24px}h1{font-size:22px;font-weight:700;color:#60a5fa;margin-bottom:4px}h2{font-size:13px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:#94a3b8;margin:20px 0 10px}.date{color:#64748b;font-size:13px;margin-bottom:24px}.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:12px;margin-bottom:24px}.card{background:#1e293b;border-radius:10px;padding:16px;border:1px solid #334155}.card .num{font-size:28px;font-weight:700}.card .lbl{font-size:11px;color:#64748b;margin-top:2px}table{width:100%;border-collapse:collapse;background:#1e293b;border-radius:10px;border:1px solid #334155;overflow:hidden}th{background:#0f172a;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;padding:8px 12px;text-align:left;color:#94a3b8}td{padding:8px 12px;font-size:13px;border-top:1px solid #1e293b}.section{margin-bottom:24px}</style></head><body><h1>SupplyLens \u2014 Supply Chain Graph Report</h1><div class=\"date\">${date} \u2014 KnopenKoning</div><div class=\"cards\"><div class=\"card\"><div class=\"num\" style=\"color:#60a5fa\">${total_companies}</div><div class=\"lbl\">Companies mapped</div></div><div class=\"card\"><div class=\"num\" style=\"color:#f59e0b\">${uncertain_count}</div><div class=\"lbl\">Low confidence (&lt;0.60)</div></div><div class=\"card\"><div class=\"num\" style=\"color:#ef4444\">${sanctioned.length}</div><div class=\"lbl\">Sanctions hits</div></div><div class=\"card\"><div class=\"num\" style=\"color:#22c55e\">${pg.accepted || 0}</div><div class=\"lbl\">Claims accepted</div></div><div class=\"card\"><div class=\"num\">${pg.contested || 0}</div><div class=\"lbl\">Contested claims</div></div><div class=\"card\"><div class=\"num\">${pg.avg_confidence || '\u2014'}</div><div class=\"lbl\">Avg confidence</div></div></div><div class=\"section\"><h2>Tier Distribution</h2><p style=\"color:#94a3b8;font-size:13px;margin-top:8px\">${tier_summary || 'No tiers yet'}</p></div><div class=\"section\"><h2>Relationship Types</h2><p style=\"color:#94a3b8;font-size:13px;margin-top:8px\">${rel_summary || 'None yet'}</p></div>${sanctioned.length > 0 ? `<div class=\"section\"><h2 style=\"color:#ef4444\">Sanctions Alerts</h2><table><tr><th>Company</th><th>Country</th><th>Risk Level</th></tr>${sanctioned_rows}</table></div>` : ''}<div class=\"section\"><h2>Most Connected Nodes (Hub Companies)</h2><table><tr><th>Company</th><th>Country</th><th>Confidence</th><th>Connections</th></tr>${top_nodes_rows || '<tr><td colspan=\"4\" style=\"color:#64748b\">No data yet</td></tr>'}</table></div></body></html>`;\n\nconst md = `# SupplyLens Weekly Report \u2014 ${date}\\n\\n**Companies mapped:** ${total_companies} | **Sanctions hits:** ${sanctioned.length} | **Avg confidence:** ${pg.avg_confidence || 'n/a'}\\n\\n## Tier Distribution\\n${tier_summary || 'No data'}\\n\\n## Claims Pipeline\\n- Accepted: ${pg.accepted} | Rejected: ${pg.rejected} | Needs review: ${pg.needs_review} | Pending: ${pg.pending}\\n- Contested: ${pg.contested}\\n\\n## Top Hub Companies\\n| Company | Country | Confidence | Connections |\\n|---------|---------|-----------|------------|\\n${top_nodes.map(n => `| ${n.name} | ${n.country || '?'} | ${(n.confidence||0).toFixed(2)} | ${n.connections} |`).join('\\n')}\\n\\n${sanctioned.length > 0 ? `## Sanctions Alerts\\n${sanctioned.map(s => `- **${s.name}** (${s.country}) \u2014 ${s.risk}`).join('\\n')}` : ''}`;\n\nreturn [{ json: { html, md, date } }];"
       },
       "id": "build-report",
       "name": "Build Report",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1100, 80]
+      "position": [
+        1100,
+        80
+      ]
     },
     {
       "parameters": {
@@ -96,7 +150,10 @@
       "name": "Base64 Encode",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1320, 80]
+      "position": [
+        1320,
+        80
+      ]
     },
     {
       "parameters": {
@@ -105,25 +162,42 @@
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
-            {"name": "Authorization", "value": "=token {{ $('Build Config Map').first().json.config.gitea_token }}"},
-            {"name": "Content-Type", "value": "application/json"}
+            {
+              "name": "Authorization",
+              "value": "=token {{ $('Build Config Map').first().json.config.gitea_token }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
           ]
         },
         "sendBody": true,
         "bodyParameters": {
           "parameters": [
-            {"name": "message", "value": "=feat: supply chain report {{ $('Build Report').first().json.date }}"},
-            {"name": "content", "value": "={{ $input.all().find(i => i.json.type==='html')?.json.content_b64 }}"}
+            {
+              "name": "message",
+              "value": "=feat: supply chain report {{ $('Build Report').first().json.date }}"
+            },
+            {
+              "name": "content",
+              "value": "={{ $input.all().find(i => i.json.type==='html')?.json.content_b64 }}"
+            }
           ]
         },
-        "options": {"timeout": 15000},
+        "options": {
+          "timeout": 15000
+        },
         "onError": "continueRegularOutput"
       },
       "id": "push-html",
       "name": "Push HTML Report",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [1540, 0]
+      "position": [
+        1540,
+        0
+      ]
     },
     {
       "parameters": {
@@ -132,38 +206,144 @@
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
-            {"name": "Authorization", "value": "=token {{ $('Build Config Map').first().json.config.gitea_token }}"},
-            {"name": "Content-Type", "value": "application/json"}
+            {
+              "name": "Authorization",
+              "value": "=token {{ $('Build Config Map').first().json.config.gitea_token }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
           ]
         },
         "sendBody": true,
         "bodyParameters": {
           "parameters": [
-            {"name": "message", "value": "=feat: supply chain summary {{ $('Build Report').first().json.date }}"},
-            {"name": "content", "value": "={{ $input.all().find(i => i.json.type==='md')?.json.content_b64 }}"}
+            {
+              "name": "message",
+              "value": "=feat: supply chain summary {{ $('Build Report').first().json.date }}"
+            },
+            {
+              "name": "content",
+              "value": "={{ $input.all().find(i => i.json.type==='md')?.json.content_b64 }}"
+            }
           ]
         },
-        "options": {"timeout": 15000},
+        "options": {
+          "timeout": 15000
+        },
         "onError": "continueRegularOutput"
       },
       "id": "push-md",
       "name": "Push MD Summary",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [1540, 160]
+      "position": [
+        1540,
+        160
+      ]
     }
   ],
   "connections": {
-    "Weekly Sunday 08:00": {"main": [[{"node": "Fetch Config", "type": "main", "index": 0}]]},
-    "Manual Trigger": {"main": [[{"node": "Fetch Config", "type": "main", "index": 0}]]},
-    "Fetch Config": {"main": [[{"node": "Build Config Map", "type": "main", "index": 0}]]},
-    "Build Config Map": {"main": [[{"node": "Fetch Graph Stats", "type": "main", "index": 0}]]},
-    "Fetch Graph Stats": {"main": [[{"node": "Fetch PG Stats", "type": "main", "index": 0}]]},
-    "Fetch PG Stats": {"main": [[{"node": "Build Report", "type": "main", "index": 0}]]},
-    "Build Report": {"main": [[{"node": "Base64 Encode", "type": "main", "index": 0}]]},
-    "Base64 Encode": {"main": [[{"node": "Push HTML Report", "type": "main", "index": 0}, {"node": "Push MD Summary", "type": "main", "index": 0}]]}
+    "Weekly Sunday 08:00": {
+      "main": [
+        [
+          {
+            "node": "Fetch Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Fetch Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Config": {
+      "main": [
+        [
+          {
+            "node": "Build Config Map",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Config Map": {
+      "main": [
+        [
+          {
+            "node": "Fetch Graph Stats",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Graph Stats": {
+      "main": [
+        [
+          {
+            "node": "Fetch PG Stats",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch PG Stats": {
+      "main": [
+        [
+          {
+            "node": "Build Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Report": {
+      "main": [
+        [
+          {
+            "node": "Base64 Encode",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Base64 Encode": {
+      "main": [
+        [
+          {
+            "node": "Push HTML Report",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Push MD Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
   },
-  "settings": {"executionOrder": "v1"},
-  "tags": ["supplylens"],
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": [
+    "supplylens"
+  ],
   "notes": "Pipeline 07: Report\n- Weekly Sunday 08:00 + manual\n- Queries Neo4j: company count, tier distribution, sanctions hits, top hub nodes\n- Queries PostgreSQL: claim pipeline stats\n- Dark-theme HTML report + markdown summary\n- Pushes to Gitea reports/"
 }

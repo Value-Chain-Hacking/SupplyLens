@@ -2,12 +2,24 @@
   "name": "supplylens: 02 Discover",
   "nodes": [
     {
-      "parameters": {"rule": {"interval": [{"field": "minutes", "intervalValue": 15}]}},
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "intervalValue": 15
+            }
+          ]
+        }
+      },
       "id": "schedule-trigger",
       "name": "Every 15 Min",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
-      "position": [0, 0]
+      "position": [
+        0,
+        0
+      ]
     },
     {
       "parameters": {},
@@ -15,7 +27,10 @@
       "name": "Called by Pipeline",
       "type": "n8n-nodes-base.executeWorkflowTrigger",
       "typeVersion": 1,
-      "position": [0, 160]
+      "position": [
+        0,
+        160
+      ]
     },
     {
       "parameters": {
@@ -25,7 +40,10 @@
       "name": "Unify Input",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [220, 80]
+      "position": [
+        220,
+        80
+      ]
     },
     {
       "parameters": {
@@ -37,8 +55,16 @@
       "name": "Fetch Config",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
-      "position": [440, 80],
-      "credentials": {"postgres": {"id": "POSTGRES_CREDENTIAL_ID", "name": "supplylens-pg"}}
+      "position": [
+        440,
+        80
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "POSTGRES_CREDENTIAL_ID",
+          "name": "supplylens-pg"
+        }
+      }
     },
     {
       "parameters": {
@@ -48,26 +74,53 @@
       "name": "Build Config Map",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [660, 80]
+      "position": [
+        660,
+        80
+      ]
     },
     {
       "parameters": {
         "operation": "executeQuery",
         "query": "UPDATE expand_queue SET status='in_progress', started_at=NOW() WHERE id = (SELECT id FROM expand_queue WHERE status='queued' AND ($1::text IS NULL OR company_name=$1) AND tier <= $2::int ORDER BY tier ASC, created_at ASC LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING id, company_name, country, tier",
-        "additionalFields": {"queryParams": "={{ [$('Build Config Map').first().json.direct_company, $('Build Config Map').first().json.config.max_tier_depth] }}"}
+        "options": {
+          "queryReplacement": "={{ [$('Build Config Map').first().json.direct_company, $('Build Config Map').first().json.config.max_tier_depth] }}"
+        }
       },
       "id": "claim-work",
       "name": "Claim Queue Item",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
-      "position": [880, 80],
-      "credentials": {"postgres": {"id": "POSTGRES_CREDENTIAL_ID", "name": "supplylens-pg"}}
+      "position": [
+        880,
+        80
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "POSTGRES_CREDENTIAL_ID",
+          "name": "supplylens-pg"
+        }
+      }
     },
     {
       "parameters": {
         "conditions": {
-          "options": {"caseSensitive": true, "leftValue": "", "typeValidation": "loose"},
-          "conditions": [{"id": "has-work", "leftValue": "={{ $json.id !== null && $json.id !== undefined }}", "rightValue": true, "operator": {"type": "boolean", "operation": "equals"}}],
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "has-work",
+              "leftValue": "={{ $json.id !== null && $json.id !== undefined }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
           "combinator": "and"
         }
       },
@@ -75,7 +128,10 @@
       "name": "Has Work?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
-      "position": [1100, 80]
+      "position": [
+        1100,
+        80
+      ]
     },
     {
       "parameters": {
@@ -85,7 +141,10 @@
       "name": "Build Search Queries",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1320, 0]
+      "position": [
+        1320,
+        0
+      ]
     },
     {
       "parameters": {
@@ -94,21 +153,41 @@
         "sendQuery": true,
         "queryParameters": {
           "parameters": [
-            {"name": "q", "value": "={{ $json.query }}"},
-            {"name": "format", "value": "json"},
-            {"name": "engines", "value": "google,bing,duckduckgo"},
-            {"name": "language", "value": "en"},
-            {"name": "pageno", "value": "1"}
+            {
+              "name": "q",
+              "value": "={{ $json.query }}"
+            },
+            {
+              "name": "format",
+              "value": "json"
+            },
+            {
+              "name": "engines",
+              "value": "google,bing,duckduckgo"
+            },
+            {
+              "name": "language",
+              "value": "en"
+            },
+            {
+              "name": "pageno",
+              "value": "1"
+            }
           ]
         },
-        "options": {"timeout": 15000},
+        "options": {
+          "timeout": 15000
+        },
         "onError": "continueRegularOutput"
       },
       "id": "search",
       "name": "SearXNG Search",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [1540, 0]
+      "position": [
+        1540,
+        0
+      ]
     },
     {
       "parameters": {
@@ -118,7 +197,10 @@
       "name": "Collect Unique URLs",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1760, 0]
+      "position": [
+        1760,
+        0
+      ]
     },
     {
       "parameters": {
@@ -127,19 +209,33 @@
         "sendBody": true,
         "bodyParameters": {
           "parameters": [
-            {"name": "url", "value": "={{ $json.url }}"},
-            {"name": "elements", "value": "={{ [{\"selector\": \"body\"}] }}"},
-            {"name": "gotoOptions", "value": "={{ {\"waitUntil\": \"domcontentloaded\", \"timeout\": 10000} }}"}
+            {
+              "name": "url",
+              "value": "={{ $json.url }}"
+            },
+            {
+              "name": "elements",
+              "value": "={{ [{\"selector\": \"body\"}] }}"
+            },
+            {
+              "name": "gotoOptions",
+              "value": "={{ {\"waitUntil\": \"domcontentloaded\", \"timeout\": 10000} }}"
+            }
           ]
         },
-        "options": {"timeout": 20000},
+        "options": {
+          "timeout": 20000
+        },
         "onError": "continueRegularOutput"
       },
       "id": "fetch-page",
       "name": "Fetch Page Content",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [1980, 0]
+      "position": [
+        1980,
+        0
+      ]
     },
     {
       "parameters": {
@@ -149,7 +245,10 @@
       "name": "Build Extract Prompt",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [2200, 0]
+      "position": [
+        2200,
+        0
+      ]
     },
     {
       "parameters": {
@@ -158,29 +257,58 @@
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
-            {"name": "Authorization", "value": "=Bearer {{ $json.config.extract_key }}"},
-            {"name": "Content-Type", "value": "application/json"},
-            {"name": "HTTP-Referer", "value": "https://supplylens.xyz"},
-            {"name": "X-Title", "value": "SupplyLens"}
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.config.extract_key }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "HTTP-Referer",
+              "value": "https://supplylens.xyz"
+            },
+            {
+              "name": "X-Title",
+              "value": "SupplyLens"
+            }
           ]
         },
         "sendBody": true,
         "bodyParameters": {
           "parameters": [
-            {"name": "model", "value": "={{ $json.config.extract_model }}"},
-            {"name": "messages", "value": "={{ [{\"role\": \"user\", \"content\": $json.prompt}] }}"},
-            {"name": "temperature", "value": 0.1},
-            {"name": "max_tokens", "value": 1500}
+            {
+              "name": "model",
+              "value": "={{ $json.config.extract_model }}"
+            },
+            {
+              "name": "messages",
+              "value": "={{ [{\"role\": \"user\", \"content\": $json.prompt}] }}"
+            },
+            {
+              "name": "temperature",
+              "value": 0.1
+            },
+            {
+              "name": "max_tokens",
+              "value": 1500
+            }
           ]
         },
-        "options": {"timeout": 60000},
+        "options": {
+          "timeout": 60000
+        },
         "onError": "continueRegularOutput"
       },
       "id": "llm-extract",
       "name": "LLM Extract Claims",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [2420, 0],
+      "position": [
+        2420,
+        0
+      ],
       "retryOnFail": true,
       "maxTries": 2,
       "waitBetweenTries": 10000
@@ -193,65 +321,236 @@
       "name": "Parse Claims",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [2640, 0]
+      "position": [
+        2640,
+        0
+      ]
     },
     {
       "parameters": {
         "operation": "executeQuery",
         "query": "INSERT INTO claims (subject, predicate, object, subject_country, object_country, raw_text, source_url, tier, validation_status) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pending') ON CONFLICT DO NOTHING",
-        "additionalFields": {"queryParams": "={{ [$json.subject, $json.predicate, $json.object, $json.subject_country, $json.object_country, $json.raw_excerpt, $json.source_url, $json.tier] }}"}
+        "options": {
+          "queryReplacement": "={{ [$json.subject, $json.predicate, $json.object, $json.subject_country, $json.object_country, $json.raw_excerpt, $json.source_url, $json.tier] }}"
+        }
       },
       "id": "insert-claims",
       "name": "Insert Claims",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
-      "position": [2860, 0],
-      "credentials": {"postgres": {"id": "POSTGRES_CREDENTIAL_ID", "name": "supplylens-pg"}}
+      "position": [
+        2860,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "POSTGRES_CREDENTIAL_ID",
+          "name": "supplylens-pg"
+        }
+      }
     },
     {
       "parameters": {
         "operation": "executeQuery",
         "query": "UPDATE expand_queue SET status='done' WHERE id=$1",
-        "additionalFields": {"queryParams": "={{ [$('Claim Queue Item').first().json.id] }}"}
+        "options": {
+          "queryReplacement": "={{ [$('Claim Queue Item').first().json.id] }}"
+        }
       },
       "id": "mark-done",
       "name": "Mark Queue Done",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
-      "position": [3080, 0],
-      "credentials": {"postgres": {"id": "POSTGRES_CREDENTIAL_ID", "name": "supplylens-pg"}}
-    },
-    {
-      "parameters": {
-        "workflowId": "CHALLENGE_WORKFLOW_ID",
-        "options": {}
-      },
-      "id": "trigger-challenge",
-      "name": "Trigger Challenge",
-      "type": "n8n-nodes-base.executeWorkflow",
-      "typeVersion": 1,
-      "position": [3300, 0]
+      "position": [
+        3080,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "POSTGRES_CREDENTIAL_ID",
+          "name": "supplylens-pg"
+        }
+      }
     }
   ],
   "connections": {
-    "Every 15 Min": {"main": [[{"node": "Unify Input", "type": "main", "index": 0}]]},
-    "Called by Pipeline": {"main": [[{"node": "Unify Input", "type": "main", "index": 0}]]},
-    "Unify Input": {"main": [[{"node": "Fetch Config", "type": "main", "index": 0}]]},
-    "Fetch Config": {"main": [[{"node": "Build Config Map", "type": "main", "index": 0}]]},
-    "Build Config Map": {"main": [[{"node": "Claim Queue Item", "type": "main", "index": 0}]]},
-    "Claim Queue Item": {"main": [[{"node": "Has Work?", "type": "main", "index": 0}]]},
-    "Has Work?": {"main": [[{"node": "Build Search Queries", "type": "main", "index": 0}], []]},
-    "Build Search Queries": {"main": [[{"node": "SearXNG Search", "type": "main", "index": 0}]]},
-    "SearXNG Search": {"main": [[{"node": "Collect Unique URLs", "type": "main", "index": 0}]]},
-    "Collect Unique URLs": {"main": [[{"node": "Fetch Page Content", "type": "main", "index": 0}]]},
-    "Fetch Page Content": {"main": [[{"node": "Build Extract Prompt", "type": "main", "index": 0}]]},
-    "Build Extract Prompt": {"main": [[{"node": "LLM Extract Claims", "type": "main", "index": 0}]]},
-    "LLM Extract Claims": {"main": [[{"node": "Parse Claims", "type": "main", "index": 0}]]},
-    "Parse Claims": {"main": [[{"node": "Insert Claims", "type": "main", "index": 0}]]},
-    "Insert Claims": {"main": [[{"node": "Mark Queue Done", "type": "main", "index": 0}]]},
-    "Mark Queue Done": {"main": [[{"node": "Trigger Challenge", "type": "main", "index": 0}]]}
+    "Every 15 Min": {
+      "main": [
+        [
+          {
+            "node": "Unify Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Called by Pipeline": {
+      "main": [
+        [
+          {
+            "node": "Unify Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Unify Input": {
+      "main": [
+        [
+          {
+            "node": "Fetch Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Config": {
+      "main": [
+        [
+          {
+            "node": "Build Config Map",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Config Map": {
+      "main": [
+        [
+          {
+            "node": "Claim Queue Item",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claim Queue Item": {
+      "main": [
+        [
+          {
+            "node": "Has Work?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Work?": {
+      "main": [
+        [
+          {
+            "node": "Build Search Queries",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Build Search Queries": {
+      "main": [
+        [
+          {
+            "node": "SearXNG Search",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SearXNG Search": {
+      "main": [
+        [
+          {
+            "node": "Collect Unique URLs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Collect Unique URLs": {
+      "main": [
+        [
+          {
+            "node": "Fetch Page Content",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Page Content": {
+      "main": [
+        [
+          {
+            "node": "Build Extract Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Extract Prompt": {
+      "main": [
+        [
+          {
+            "node": "LLM Extract Claims",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LLM Extract Claims": {
+      "main": [
+        [
+          {
+            "node": "Parse Claims",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Claims": {
+      "main": [
+        [
+          {
+            "node": "Insert Claims",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Claims": {
+      "main": [
+        [
+          {
+            "node": "Mark Queue Done",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark Queue Done": {
+      "main": [
+        []
+      ]
+    }
   },
-  "settings": {"executionOrder": "v1"},
-  "tags": ["supplylens"],
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": [
+    "supplylens"
+  ],
   "notes": "Pipeline 02: Discover\n- Polls expand_queue for queued companies\n- Runs 3 SearXNG searches per company\n- Fetches top 6 pages via Browserless\n- Gemini Flash extracts supply chain claims\n- Inserts raw claims into PostgreSQL\n- Triggers 03-challenge"
 }
