@@ -1,0 +1,71 @@
+{
+  "name": "supplylens: 05 Watchdog",
+  "nodes": [
+    {
+      "parameters": {"rule": {"interval": [{"field": "minutes", "intervalValue": 30}]}},
+      "id": "schedule-trigger",
+      "name": "Every 30 Min",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE expand_queue SET status='queued', started_at=NULL WHERE status='in_progress' AND started_at < NOW() - INTERVAL '2 hours' RETURNING company_name, tier",
+        "additionalFields": {}
+      },
+      "id": "reset-stuck-queue",
+      "name": "Reset Stuck Queue Items",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [220, 0],
+      "credentials": {"postgres": {"id": "POSTGRES_CREDENTIAL_ID", "name": "supplylens-pg"}}
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE claims SET validation_status='pending' WHERE validation_status='pending' AND created_at < NOW() - INTERVAL '6 hours' AND confidence IS NULL RETURNING id",
+        "additionalFields": {}
+      },
+      "id": "reset-stuck-claims",
+      "name": "Reset Orphan Claims",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [440, 0],
+      "credentials": {"postgres": {"id": "POSTGRES_CREDENTIAL_ID", "name": "supplylens-pg"}}
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT (SELECT count(*) FROM expand_queue WHERE status='queued') as queued, (SELECT count(*) FROM expand_queue WHERE status='in_progress') as in_progress, (SELECT count(*) FROM claims WHERE validation_status='pending') as pending_claims, (SELECT count(*) FROM claims WHERE validation_status='accepted' AND written_to_graph=false) as unwritten_claims",
+        "additionalFields": {}
+      },
+      "id": "health-check",
+      "name": "Health Check",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [660, 0],
+      "credentials": {"postgres": {"id": "POSTGRES_CREDENTIAL_ID", "name": "supplylens-pg"}}
+    },
+    {
+      "parameters": {
+        "jsCode": "const s = $input.first().json;\nconsole.log(`[Watchdog] Queue: ${s.queued} queued, ${s.in_progress} in_progress | Claims: ${s.pending_claims} pending, ${s.unwritten_claims} accepted/unwritten`);\nreturn [{ json: s }];"
+      },
+      "id": "log-status",
+      "name": "Log Status",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [880, 0]
+    }
+  ],
+  "connections": {
+    "Every 30 Min": {"main": [[{"node": "Reset Stuck Queue Items", "type": "main", "index": 0}]]},
+    "Reset Stuck Queue Items": {"main": [[{"node": "Reset Orphan Claims", "type": "main", "index": 0}]]},
+    "Reset Orphan Claims": {"main": [[{"node": "Health Check", "type": "main", "index": 0}]]},
+    "Health Check": {"main": [[{"node": "Log Status", "type": "main", "index": 0}]]}
+  },
+  "settings": {"executionOrder": "v1"},
+  "tags": ["supplylens"],
+  "notes": "Pipeline 05: Watchdog\n- Every 30min: reset expand_queue items stuck in_progress >2h\n- Reset orphan claims (pending >6h with no confidence score)\n- Log pipeline health stats"
+}

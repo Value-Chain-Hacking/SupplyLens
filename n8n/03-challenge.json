@@ -1,0 +1,267 @@
+{
+  "name": "supplylens: 03 Challenge",
+  "nodes": [
+    {
+      "parameters": {"rule": {"interval": [{"field": "minutes", "intervalValue": 10}]}},
+      "id": "schedule-trigger",
+      "name": "Every 10 Min",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {},
+      "id": "workflow-trigger",
+      "name": "Called by Discover",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [0, 160]
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: { triggered: true } }];"
+      },
+      "id": "unify",
+      "name": "Unify Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 80]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT key, value FROM pipeline_config",
+        "additionalFields": {}
+      },
+      "id": "fetch-config",
+      "name": "Fetch Config",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [440, 80],
+      "credentials": {"postgres": {"id": "POSTGRES_CREDENTIAL_ID", "name": "supplylens-pg"}}
+    },
+    {
+      "parameters": {
+        "jsCode": "const rows = $input.all();\nconst config = {};\nfor (const r of rows) config[r.json.key] = r.json.value;\nreturn [{ json: { config } }];"
+      },
+      "id": "build-config",
+      "name": "Build Config Map",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 80]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, subject, predicate, object, raw_text, source_url, tier FROM claims WHERE validation_status='pending' ORDER BY created_at ASC LIMIT $1 FOR UPDATE SKIP LOCKED",
+        "additionalFields": {"queryParams": "={{ [$('Build Config Map').first().json.config.max_claims_per_batch || '5'] }}"}
+      },
+      "id": "fetch-claims",
+      "name": "Fetch Pending Claims",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [880, 80],
+      "credentials": {"postgres": {"id": "POSTGRES_CREDENTIAL_ID", "name": "supplylens-pg"}}
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {"caseSensitive": true, "leftValue": "", "typeValidation": "loose"},
+          "conditions": [{"id": "has-claims", "leftValue": "={{ $json.id !== null && $json.id !== undefined }}", "rightValue": true, "operator": {"type": "boolean", "operation": "equals"}}],
+          "combinator": "and"
+        }
+      },
+      "id": "has-claims",
+      "name": "Has Claims?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1100, 80]
+    },
+    {
+      "parameters": {
+        "jsCode": "const claim = $input.first().json;\nconst config = $('Build Config Map').first().json.config;\n\nconst prompt = `You are a supply chain investigator building a LEGAL CASE that the following claim is TRUE.\\n\\nCLAIM: ${claim.subject} ${claim.predicate} ${claim.object}\\nEVIDENCE: \"${claim.raw_text || 'No direct evidence — infer from industry knowledge'}\"\\nSOURCE: ${claim.source_url || 'unknown'}\\n\\nYour job: argue aggressively that this supply chain relationship EXISTS and is real.\\nUse the evidence. Infer from industry knowledge. Be specific and concrete.\\n\\nReturn ONLY valid JSON:\\n{\"verdict\": \"TRUE\", \"points\": [\"Point 1...\", \"Point 2...\", \"Point 3...\"], \"confidence_delta\": 0.25}\\n\\nconfidence_delta must be between 0.10 and 0.45.`;\n\nreturn [{ json: { claim_id: claim.id, claim, prompt, config } }];"
+      },
+      "id": "build-prosecution",
+      "name": "Build Prosecution Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1320, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.config.openrouter_base }}/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {"name": "Authorization", "value": "=Bearer {{ $json.config.prosecutor_key }}"},
+            {"name": "Content-Type", "value": "application/json"},
+            {"name": "HTTP-Referer", "value": "https://supplylens.xyz"},
+            {"name": "X-Title", "value": "SupplyLens-Prosecutor"}
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {"name": "model", "value": "={{ $json.config.prosecutor_model }}"},
+            {"name": "messages", "value": "={{ [{\"role\": \"user\", \"content\": $json.prompt}] }}"},
+            {"name": "temperature", "value": 0.3},
+            {"name": "max_tokens", "value": 800}
+          ]
+        },
+        "options": {"timeout": 60000},
+        "onError": "continueRegularOutput"
+      },
+      "id": "prosecutor-llm",
+      "name": "Prosecutor LLM (Cohere)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1540, 0],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 15000
+    },
+    {
+      "parameters": {
+        "jsCode": "const resp = $input.first().json;\nconst ctx = $('Build Prosecution Prompt').first().json;\n\nlet prosecution = { verdict: 'TRUE', points: [], confidence_delta: 0.2 };\ntry {\n  let content = resp?.choices?.[0]?.message?.content || '{}';\n  content = content.replace(/^```(?:json)?\\s*/i, '').replace(/\\s*```$/i, '').trim();\n  prosecution = JSON.parse(content);\n} catch(e) {}\n\nif (!prosecution.points) prosecution.points = [];\nif (!prosecution.confidence_delta) prosecution.confidence_delta = 0.2;\n\nconst claim = ctx.claim;\nconst config = ctx.config;\nconst prompt = `You are a supply chain defense attorney challenging the following claim.\\n\\nCLAIM: ${claim.subject} ${claim.predicate} ${claim.object}\\nORIGINAL EVIDENCE: \"${claim.raw_text || 'none'}\"\\nSOURCE: ${claim.source_url || 'unknown'}\\n\\nPROSECUTION ARGUED:\\n${prosecution.points.map((p, i) => `${i+1}. ${p}`).join('\\n')}\\n\\nYour job: argue aggressively that this claim is UNCERTAIN, WRONG, or MISLEADING.\\nFind gaps. Challenge source reliability. Identify alternative explanations.\\n\\nReturn ONLY valid JSON:\\n{\"verdict\": \"FALSE\", \"points\": [\"Counter 1...\", \"Counter 2...\", \"Counter 3...\"], \"confidence_delta\": -0.15}\\n\\nconfidence_delta must be negative, between -0.40 and -0.05.`;\n\nreturn [{ json: { claim_id: ctx.claim_id, claim, prosecution, prompt, config } }];"
+      },
+      "id": "parse-prosecution",
+      "name": "Parse + Build Defense Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1760, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.config.openrouter_base }}/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {"name": "Authorization", "value": "=Bearer {{ $json.config.defender_key }}"},
+            {"name": "Content-Type", "value": "application/json"},
+            {"name": "HTTP-Referer", "value": "https://supplylens.xyz"},
+            {"name": "X-Title", "value": "SupplyLens-Defender"}
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {"name": "model", "value": "={{ $json.config.defender_model }}"},
+            {"name": "messages", "value": "={{ [{\"role\": \"user\", \"content\": $json.prompt}] }}"},
+            {"name": "temperature", "value": 0.3},
+            {"name": "max_tokens", "value": 800}
+          ]
+        },
+        "options": {"timeout": 60000},
+        "onError": "continueRegularOutput"
+      },
+      "id": "defender-llm",
+      "name": "Defender LLM (Llama)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1980, 0],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 15000
+    },
+    {
+      "parameters": {
+        "jsCode": "const resp = $input.first().json;\nconst ctx = $('Parse + Build Defense Prompt').first().json;\n\nlet defense = { verdict: 'FALSE', points: [], confidence_delta: -0.15 };\ntry {\n  let content = resp?.choices?.[0]?.message?.content || '{}';\n  content = content.replace(/^```(?:json)?\\s*/i, '').replace(/\\s*```$/i, '').trim();\n  defense = JSON.parse(content);\n} catch(e) {}\n\nif (!defense.points) defense.points = [];\nif (!defense.confidence_delta) defense.confidence_delta = -0.15;\n\nconst prosecution = ctx.prosecution;\nconst claim = ctx.claim;\nconst config = ctx.config;\nconst after_prosecution = (0.5 + prosecution.confidence_delta).toFixed(2);\nconst final_est = (0.5 + prosecution.confidence_delta + defense.confidence_delta).toFixed(2);\n\nconst prompt = `You are a senior supply chain analyst. Deliver a final verdict.\\n\\nCLAIM: ${claim.subject} ${claim.predicate} ${claim.object}\\nORIGINAL EVIDENCE: \"${claim.raw_text || 'none'}\"\\n\\nPROSECUTION (arguing TRUE):\\n${prosecution.points.map((p, i) => `${i+1}. ${p}`).join('\\n')}\\nProsecution confidence boost: +${prosecution.confidence_delta}\\n\\nDEFENSE (arguing FALSE):\\n${defense.points.map((p, i) => `${i+1}. ${p}`).join('\\n')}\\nDefense confidence reduction: ${defense.confidence_delta}\\n\\nBase: 0.50 + ${prosecution.confidence_delta} - ${Math.abs(defense.confidence_delta)} = ${final_est} (estimate)\\n\\nSynthesize both sides. Consider source reliability, specificity, corroboration.\\n\\nReturn ONLY valid JSON:\\n{\"confidence\": 0.73, \"verdict\": \"ACCEPTED\", \"contested\": false, \"reasoning\": \"One sentence.\", \"validation_status\": \"accepted\"}\\n\\nverdict: ACCEPTED (>=0.60), NEEDS_REVIEW (0.40-0.59), REJECTED (<0.40)\\nvalidation_status: accepted / needs_review / rejected\\ncontested: true if prosecution and defense strongly disagreed`;\n\nreturn [{ json: { claim_id: ctx.claim_id, claim, prosecution, defense, prompt, config } }];"
+      },
+      "id": "parse-defense",
+      "name": "Parse + Build Judge Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2200, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.config.openrouter_base }}/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {"name": "Authorization", "value": "=Bearer {{ $json.config.judge_key }}"},
+            {"name": "Content-Type", "value": "application/json"},
+            {"name": "HTTP-Referer", "value": "https://supplylens.xyz"},
+            {"name": "X-Title", "value": "SupplyLens-Judge"}
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {"name": "model", "value": "={{ $json.config.judge_model }}"},
+            {"name": "messages", "value": "={{ [{\"role\": \"user\", \"content\": $json.prompt}] }}"},
+            {"name": "temperature", "value": 0.1},
+            {"name": "max_tokens", "value": 600}
+          ]
+        },
+        "options": {"timeout": 90000},
+        "onError": "continueRegularOutput"
+      },
+      "id": "judge-llm",
+      "name": "Judge LLM (DeepSeek R1)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2420, 0],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 20000
+    },
+    {
+      "parameters": {
+        "jsCode": "const resp = $input.first().json;\nconst ctx = $('Parse + Build Judge Prompt').first().json;\n\nlet verdict = { confidence: 0.5, verdict: 'NEEDS_REVIEW', contested: true, reasoning: 'parse error', validation_status: 'needs_review' };\ntry {\n  let content = resp?.choices?.[0]?.message?.content || '{}';\n  // DeepSeek R1 may wrap in <think>...</think>\n  content = content.replace(/<think>[\\s\\S]*?<\\/think>/g, '').trim();\n  content = content.replace(/^```(?:json)?\\s*/i, '').replace(/\\s*```$/i, '').trim();\n  verdict = JSON.parse(content);\n} catch(e) {}\n\nconst confidence = parseFloat(verdict.confidence) || 0.5;\nconst validation_status = verdict.validation_status || (confidence >= 0.6 ? 'accepted' : confidence >= 0.4 ? 'needs_review' : 'rejected');\n\nreturn [{ json: {\n  claim_id: ctx.claim_id,\n  confidence,\n  contested: verdict.contested || false,\n  reasoning: verdict.reasoning || '',\n  validation_status,\n  prosecution: ctx.prosecution,\n  defense: ctx.defense\n} }];"
+      },
+      "id": "parse-verdict",
+      "name": "Parse Verdict",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2640, 0]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE claims SET confidence=$1, contested=$2, prosecution=$3, defense=$4, validation_status=$5, validated_at=NOW() WHERE id=$6",
+        "additionalFields": {"queryParams": "={{ [$json.confidence, $json.contested, JSON.stringify($json.prosecution), JSON.stringify($json.defense), $json.validation_status, $json.claim_id] }}"}
+      },
+      "id": "update-claim",
+      "name": "Update Claim",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [2860, 0],
+      "credentials": {"postgres": {"id": "POSTGRES_CREDENTIAL_ID", "name": "supplylens-pg"}}
+    },
+    {
+      "parameters": {
+        "workflowId": "INGEST_WORKFLOW_ID",
+        "options": {}
+      },
+      "id": "trigger-ingest",
+      "name": "Trigger Ingest",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1,
+      "position": [3080, 0]
+    }
+  ],
+  "connections": {
+    "Every 10 Min": {"main": [[{"node": "Unify Input", "type": "main", "index": 0}]]},
+    "Called by Discover": {"main": [[{"node": "Unify Input", "type": "main", "index": 0}]]},
+    "Unify Input": {"main": [[{"node": "Fetch Config", "type": "main", "index": 0}]]},
+    "Fetch Config": {"main": [[{"node": "Build Config Map", "type": "main", "index": 0}]]},
+    "Build Config Map": {"main": [[{"node": "Fetch Pending Claims", "type": "main", "index": 0}]]},
+    "Fetch Pending Claims": {"main": [[{"node": "Has Claims?", "type": "main", "index": 0}]]},
+    "Has Claims?": {"main": [[{"node": "Build Prosecution Prompt", "type": "main", "index": 0}], []]},
+    "Build Prosecution Prompt": {"main": [[{"node": "Prosecutor LLM (Cohere)", "type": "main", "index": 0}]]},
+    "Prosecutor LLM (Cohere)": {"main": [[{"node": "Parse + Build Defense Prompt", "type": "main", "index": 0}]]},
+    "Parse + Build Defense Prompt": {"main": [[{"node": "Defender LLM (Llama)", "type": "main", "index": 0}]]},
+    "Defender LLM (Llama)": {"main": [[{"node": "Parse + Build Judge Prompt", "type": "main", "index": 0}]]},
+    "Parse + Build Judge Prompt": {"main": [[{"node": "Judge LLM (DeepSeek R1)", "type": "main", "index": 0}]]},
+    "Judge LLM (DeepSeek R1)": {"main": [[{"node": "Parse Verdict", "type": "main", "index": 0}]]},
+    "Parse Verdict": {"main": [[{"node": "Update Claim", "type": "main", "index": 0}]]},
+    "Update Claim": {"main": [[{"node": "Trigger Ingest", "type": "main", "index": 0}]]}
+  },
+  "settings": {"executionOrder": "v1"},
+  "tags": ["supplylens"],
+  "notes": "Pipeline 03: Challenge (Adversarial Reasoning)\n- 3 different models argue the same claim:\n  - Prosecutor: Cohere Command R (build case for TRUE)\n  - Defender: Llama 3.3 70B (argue FALSE)\n  - Judge: DeepSeek R1 (synthesize + assign confidence 0-1)\n- Each model uses a different OpenRouter key\n- Updates claim with confidence + validation_status\n- Triggers 04-ingest for accepted claims"
+}

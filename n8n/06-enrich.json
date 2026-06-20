@@ -1,0 +1,196 @@
+{
+  "name": "supplylens: 06 Enrich",
+  "nodes": [
+    {
+      "parameters": {"rule": {"interval": [{"field": "hours", "intervalValue": 24}]}},
+      "id": "schedule-trigger",
+      "name": "Daily",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {},
+      "id": "manual-trigger",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [0, 160]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT key, value FROM pipeline_config",
+        "additionalFields": {}
+      },
+      "id": "fetch-config",
+      "name": "Fetch Config",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [220, 80],
+      "credentials": {"postgres": {"id": "POSTGRES_CREDENTIAL_ID", "name": "supplylens-pg"}}
+    },
+    {
+      "parameters": {
+        "jsCode": "const rows = $input.all();\nconst config = {};\nfor (const r of rows) config[r.json.key] = r.json.value;\nreturn [{ json: { config } }];"
+      },
+      "id": "build-config",
+      "name": "Build Config Map",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, 80]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.config.neo4j_uri }}/db/neo4j/tx/commit",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {"name": "Authorization", "value": "=Basic {{ Buffer.from($json.config.neo4j_user + ':' + $json.config.neo4j_password).toString('base64') }}"},
+            {"name": "Content-Type", "value": "application/json"}
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {"name": "statements", "value": "={{ [{\"statement\": \"MATCH (c:Company) WHERE c.last_enriched IS NULL OR c.last_enriched < datetime() - duration('P7D') RETURN c.name as name, c.country as country ORDER BY c.created_at ASC LIMIT 20\"}] }}"}
+          ]
+        },
+        "options": {"timeout": 15000}
+      },
+      "id": "fetch-companies",
+      "name": "Fetch Companies to Enrich",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [660, 80]
+    },
+    {
+      "parameters": {
+        "jsCode": "const resp = $input.first().json;\nconst config = $('Build Config Map').first().json.config;\nconst companies = (resp?.results?.[0]?.data || []).map(d => d.row);\nreturn companies.map(c => ({ json: { name: c[0], country: c[1], config } }));"
+      },
+      "id": "parse-companies",
+      "name": "Parse Companies",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [880, 80]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.config.searxng_base }}/search",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {"name": "q", "value": "={{ '\"' + $json.name + '\" sanctions OR OFAC OR controversy OR fine OR labor OR ESG' }}"},
+            {"name": "format", "value": "json"},
+            {"name": "engines", "value": "google,bing"},
+            {"name": "language", "value": "en"}
+          ]
+        },
+        "options": {"timeout": 15000},
+        "onError": "continueRegularOutput"
+      },
+      "id": "enrich-search",
+      "name": "Enrich Search",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1100, 80]
+    },
+    {
+      "parameters": {
+        "jsCode": "const resp = $input.first().json;\nconst company_data = $('Parse Companies').first().json;\nconst config = company_data.config;\n\nconst results = resp?.results || [];\nconst snippets = results.slice(0, 5).map(r => `${r.title}: ${r.content || ''}`).join('\\n');\n\nconst prompt = `You are a supply chain risk analyst. Analyze this company for ESG risks, sanctions, and certifications.\\n\\nCOMPANY: ${company_data.name} (${company_data.country || 'unknown country'})\\n\\nSEARCH RESULTS:\\n${snippets}\\n\\nReturn ONLY valid JSON:\\n{\\n  \"risk_flags\": [\"flag1\", \"flag2\"],\\n  \"certifications\": [\"ISO9001\", \"CE\"],\\n  \"esg_score\": null,\\n  \"sanctions_hit\": false,\\n  \"news_summary\": \"One sentence about notable news\",\\n  \"risk_level\": \"low|medium|high\"\\n}\\n\\nrisk_flags: list of risks found (sanctions, labor violations, environmental fines, etc)\\ncertifications: list of certifications mentioned\\nsanctions_hit: true ONLY if directly on OFAC/EU sanctions list`;\n\nreturn [{ json: { prompt, company: company_data.name, config } }];"
+      },
+      "id": "build-enrich-prompt",
+      "name": "Build Enrich Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1320, 80]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.config.openrouter_base }}/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {"name": "Authorization", "value": "=Bearer {{ $json.config.enrich_key }}"},
+            {"name": "Content-Type", "value": "application/json"},
+            {"name": "HTTP-Referer", "value": "https://supplylens.xyz"},
+            {"name": "X-Title", "value": "SupplyLens-Enrich"}
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {"name": "model", "value": "={{ $json.config.enrich_model }}"},
+            {"name": "messages", "value": "={{ [{\"role\": \"user\", \"content\": $json.prompt}] }}"},
+            {"name": "temperature", "value": 0.1},
+            {"name": "max_tokens", "value": 600}
+          ]
+        },
+        "options": {"timeout": 60000},
+        "onError": "continueRegularOutput"
+      },
+      "id": "enrich-llm",
+      "name": "Enrich LLM (Mistral)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1540, 80],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 10000
+    },
+    {
+      "parameters": {
+        "jsCode": "const resp = $input.first().json;\nconst ctx = $('Build Enrich Prompt').first().json;\nconst config = $('Build Config Map').first().json.config;\n\nlet enrichment = { risk_flags: [], certifications: [], sanctions_hit: false, risk_level: 'unknown', news_summary: '' };\ntry {\n  let content = resp?.choices?.[0]?.message?.content || '{}';\n  content = content.replace(/^```(?:json)?\\s*/i, '').replace(/\\s*```$/i, '').trim();\n  enrichment = JSON.parse(content);\n} catch(e) {}\n\nconst auth = Buffer.from(config.neo4j_user + ':' + config.neo4j_password).toString('base64');\n\nconst setClause = `SET c.risk_flags = $risk_flags, c.certifications = $certifications, c.sanctions_hit = $sanctions_hit, c.risk_level = $risk_level, c.news_summary = $news_summary, c.last_enriched = datetime()`;\nconst cypher = `MATCH (c:Company {name: $name}) ${setClause} RETURN c.name as name`;\n\nreturn [{ json: {\n  cypher, auth, company: ctx.company,\n  config,\n  params: {\n    name: ctx.company,\n    risk_flags: enrichment.risk_flags || [],\n    certifications: enrichment.certifications || [],\n    sanctions_hit: enrichment.sanctions_hit || false,\n    risk_level: enrichment.risk_level || 'unknown',\n    news_summary: enrichment.news_summary || ''\n  }\n} }];"
+      },
+      "id": "build-update",
+      "name": "Build Neo4j Update",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1760, 80]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Build Config Map').first().json.config.neo4j_uri }}/db/neo4j/tx/commit",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {"name": "Authorization", "value": "=Basic {{ $json.auth }}"},
+            {"name": "Content-Type", "value": "application/json"}
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {"name": "statements", "value": "={{ [{\"statement\": $json.cypher, \"parameters\": $json.params}] }}"}
+          ]
+        },
+        "options": {"timeout": 15000},
+        "onError": "continueRegularOutput"
+      },
+      "id": "update-neo4j",
+      "name": "Update Neo4j Node",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1980, 80]
+    }
+  ],
+  "connections": {
+    "Daily": {"main": [[{"node": "Fetch Config", "type": "main", "index": 0}]]},
+    "Manual Trigger": {"main": [[{"node": "Fetch Config", "type": "main", "index": 0}]]},
+    "Fetch Config": {"main": [[{"node": "Build Config Map", "type": "main", "index": 0}]]},
+    "Build Config Map": {"main": [[{"node": "Fetch Companies to Enrich", "type": "main", "index": 0}]]},
+    "Fetch Companies to Enrich": {"main": [[{"node": "Parse Companies", "type": "main", "index": 0}]]},
+    "Parse Companies": {"main": [[{"node": "Enrich Search", "type": "main", "index": 0}]]},
+    "Enrich Search": {"main": [[{"node": "Build Enrich Prompt", "type": "main", "index": 0}]]},
+    "Build Enrich Prompt": {"main": [[{"node": "Enrich LLM (Mistral)", "type": "main", "index": 0}]]},
+    "Enrich LLM (Mistral)": {"main": [[{"node": "Build Neo4j Update", "type": "main", "index": 0}]]},
+    "Build Neo4j Update": {"main": [[{"node": "Update Neo4j Node", "type": "main", "index": 0}]]}
+  },
+  "settings": {"executionOrder": "v1"},
+  "tags": ["supplylens"],
+  "notes": "Pipeline 06: Enrich\n- Daily: find companies not enriched in last 7 days\n- SearXNG search for sanctions, ESG, certifications\n- Mistral 7B extracts structured risk data\n- Updates Neo4j node: risk_flags, certifications, sanctions_hit, risk_level"
+}

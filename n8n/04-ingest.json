@@ -1,0 +1,199 @@
+{
+  "name": "supplylens: 04 Ingest",
+  "nodes": [
+    {
+      "parameters": {"rule": {"interval": [{"field": "minutes", "intervalValue": 10}]}},
+      "id": "schedule-trigger",
+      "name": "Every 10 Min",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {},
+      "id": "workflow-trigger",
+      "name": "Called by Challenge",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [0, 160]
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: { triggered: true } }];"
+      },
+      "id": "unify",
+      "name": "Unify Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 80]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT key, value FROM pipeline_config",
+        "additionalFields": {}
+      },
+      "id": "fetch-config",
+      "name": "Fetch Config",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [440, 80],
+      "credentials": {"postgres": {"id": "POSTGRES_CREDENTIAL_ID", "name": "supplylens-pg"}}
+    },
+    {
+      "parameters": {
+        "jsCode": "const rows = $input.all();\nconst config = {};\nfor (const r of rows) config[r.json.key] = r.json.value;\nreturn [{ json: { config } }];"
+      },
+      "id": "build-config",
+      "name": "Build Config Map",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 80]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, subject, predicate, object, subject_country, object_country, confidence, contested, source_url, tier FROM claims WHERE validation_status='accepted' AND written_to_graph=false ORDER BY confidence DESC LIMIT 10 FOR UPDATE SKIP LOCKED",
+        "additionalFields": {}
+      },
+      "id": "fetch-accepted",
+      "name": "Fetch Accepted Claims",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [880, 80],
+      "credentials": {"postgres": {"id": "POSTGRES_CREDENTIAL_ID", "name": "supplylens-pg"}}
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {"caseSensitive": true, "leftValue": "", "typeValidation": "loose"},
+          "conditions": [{"id": "has-claims", "leftValue": "={{ $json.id !== null && $json.id !== undefined }}", "rightValue": true, "operator": {"type": "boolean", "operation": "equals"}}],
+          "combinator": "and"
+        }
+      },
+      "id": "has-claims",
+      "name": "Has Claims?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1100, 80]
+    },
+    {
+      "parameters": {
+        "jsCode": "const claim = $input.first().json;\nconst config = $('Build Config Map').first().json.config;\nconst auth = Buffer.from(config.neo4j_user + ':' + config.neo4j_password).toString('base64');\n\nconst cypher = `MERGE (s:Company {name: $subject})\nSET s.country = COALESCE(s.country, $subject_country)\nMERGE (o:Company {name: $object})\nSET o.country = COALESCE(o.country, $object_country), o.tier = COALESCE(o.tier, $tier)\nMERGE (s)-[r:${claim.predicate} {source: $source}]->(o)\nSET r.confidence = $confidence, r.contested = $contested, r.verified_date = date()\nRETURN s.name as subject, o.name as object, r.confidence as confidence`;\n\nreturn [{ json: { claim_id: claim.id, claim, cypher, auth, config,\n  params: {\n    subject: claim.subject, object: claim.object,\n    subject_country: claim.subject_country || 'unknown',\n    object_country: claim.object_country || 'unknown',\n    confidence: claim.confidence, contested: claim.contested,\n    source: claim.source_url || 'unknown', tier: (claim.tier || 1)\n  }\n} }];"
+      },
+      "id": "build-cypher",
+      "name": "Build Cypher Query",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1320, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Build Config Map').first().json.config.neo4j_uri }}/db/neo4j/tx/commit",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {"name": "Authorization", "value": "=Basic {{ $json.auth }}"},
+            {"name": "Content-Type", "value": "application/json"}
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {"name": "statements", "value": "={{ [{\"statement\": $json.cypher, \"parameters\": $json.params}] }}"}
+          ]
+        },
+        "options": {"timeout": 15000},
+        "onError": "continueRegularOutput"
+      },
+      "id": "write-neo4j",
+      "name": "Write to Neo4j",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1540, 0]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE claims SET written_to_graph=true WHERE id=$1",
+        "additionalFields": {"queryParams": "={{ [$('Build Cypher Query').first().json.claim_id] }}"}
+      },
+      "id": "mark-written",
+      "name": "Mark Written",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1760, 0],
+      "credentials": {"postgres": {"id": "POSTGRES_CREDENTIAL_ID", "name": "supplylens-pg"}}
+    },
+    {
+      "parameters": {
+        "jsCode": "const claim = $('Build Cypher Query').first().json.claim;\nconst config = $('Build Config Map').first().json.config;\nconst max_depth = parseInt(config.max_tier_depth || '3');\nconst next_tier = (claim.tier || 1);\n\nif (next_tier >= max_depth) {\n  return [{ json: { status: 'max_depth_reached', tier: next_tier } }];\n}\n\nreturn [{ json: { company: claim.object, country: claim.object_country, tier: next_tier, queue_company: true } }];"
+      },
+      "id": "check-expand",
+      "name": "Check Expansion",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1980, 0]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {"caseSensitive": true, "leftValue": "", "typeValidation": "loose"},
+          "conditions": [{"id": "should-expand", "leftValue": "={{ $json.queue_company === true }}", "rightValue": true, "operator": {"type": "boolean", "operation": "equals"}}],
+          "combinator": "and"
+        }
+      },
+      "id": "should-expand",
+      "name": "Should Expand?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [2200, 0]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO expand_queue (company_name, country, tier, status, parent_company) VALUES ($1, $2, $3, 'queued', $4) ON CONFLICT (company_name, tier) DO NOTHING",
+        "additionalFields": {"queryParams": "={{ [$json.company, $json.country, $json.tier, $('Build Cypher Query').first().json.claim.subject] }}"}
+      },
+      "id": "queue-next",
+      "name": "Queue Next Company",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [2420, -80],
+      "credentials": {"postgres": {"id": "POSTGRES_CREDENTIAL_ID", "name": "supplylens-pg"}}
+    },
+    {
+      "parameters": {
+        "workflowId": "DISCOVER_WORKFLOW_ID",
+        "options": {}
+      },
+      "id": "trigger-discover",
+      "name": "Trigger Discover (Next Tier)",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1,
+      "position": [2640, -80]
+    }
+  ],
+  "connections": {
+    "Every 10 Min": {"main": [[{"node": "Unify Input", "type": "main", "index": 0}]]},
+    "Called by Challenge": {"main": [[{"node": "Unify Input", "type": "main", "index": 0}]]},
+    "Unify Input": {"main": [[{"node": "Fetch Config", "type": "main", "index": 0}]]},
+    "Fetch Config": {"main": [[{"node": "Build Config Map", "type": "main", "index": 0}]]},
+    "Build Config Map": {"main": [[{"node": "Fetch Accepted Claims", "type": "main", "index": 0}]]},
+    "Fetch Accepted Claims": {"main": [[{"node": "Has Claims?", "type": "main", "index": 0}]]},
+    "Has Claims?": {"main": [[{"node": "Build Cypher Query", "type": "main", "index": 0}], []]},
+    "Build Cypher Query": {"main": [[{"node": "Write to Neo4j", "type": "main", "index": 0}]]},
+    "Write to Neo4j": {"main": [[{"node": "Mark Written", "type": "main", "index": 0}]]},
+    "Mark Written": {"main": [[{"node": "Check Expansion", "type": "main", "index": 0}]]},
+    "Check Expansion": {"main": [[{"node": "Should Expand?", "type": "main", "index": 0}]]},
+    "Should Expand?": {"main": [
+      [{"node": "Queue Next Company", "type": "main", "index": 0}],
+      []
+    ]},
+    "Queue Next Company": {"main": [[{"node": "Trigger Discover (Next Tier)", "type": "main", "index": 0}]]}
+  },
+  "settings": {"executionOrder": "v1"},
+  "tags": ["supplylens"],
+  "notes": "Pipeline 04: Ingest\n- Picks accepted claims (confidence >= threshold)\n- MERGE nodes + relationships into Neo4j via REST API\n- confidence + contested + source stored on every edge\n- Queues newly discovered companies at next tier\n- Stops at max_tier_depth (default 3)\n- Triggers 02-discover for next tier companies"
+}
