@@ -204,34 +204,12 @@
     },
     {
       "parameters": {
-        "method": "POST",
-        "url": "={{ $('Build Config Map').first().json.config.browserless_url }}/chromium/scrape",
-        "sendBody": true,
-        "bodyParameters": {
-          "parameters": [
-            {
-              "name": "url",
-              "value": "={{ $json.url }}"
-            },
-            {
-              "name": "elements",
-              "value": "={{ [{\"selector\": \"body\"}] }}"
-            },
-            {
-              "name": "gotoOptions",
-              "value": "={{ {\"waitUntil\": \"domcontentloaded\", \"timeout\": 10000} }}"
-            }
-          ]
-        },
-        "options": {
-          "timeout": 20000
-        },
-        "onError": "continueRegularOutput"
+        "jsCode": "// Use snippet from search result as page content\n// Browserless is optional enrichment; snippets are sufficient for LLM extraction\nconst item = $input.first().json;\nconst body = item.snippet || item.title || '';\nreturn [{ json: { body, url: item.url } }];"
       },
       "id": "fetch-page",
-      "name": "Fetch Page Content",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
+      "name": "Prepare Page Content",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
       "position": [
         1980,
         0
@@ -239,7 +217,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const page = $input.first().json;\nconst ctx = $('Collect Unique URLs').first().json;\nconst config = $('Build Config Map').first().json.config;\n\nlet raw_text = '';\ntry {\n  const elements = page?.data || page?.results || [];\n  raw_text = elements.map(e => e.text || e.results?.[0]?.text || '').join(' ');\n} catch(e) {}\nif (!raw_text) raw_text = ctx.snippet || '';\nraw_text = raw_text.replace(/\\s+/g, ' ').substring(0, 3000);\n\nconst prompt = `You are a supply chain analyst. Extract supply chain relationships from the text below.\\n\\nCompany under investigation: ${ctx.company}\\nSource URL: ${ctx.url}\\n\\nTEXT:\\n${raw_text}\\n\\nReturn ONLY valid JSON array. Extract every supplier, manufacturer, partner, or sourcing relationship mentioned.\\nFormat: [{\"subject\": \"Company A\", \"predicate\": \"SUPPLIES\", \"object\": \"Company B\", \"subject_country\": \"NL\", \"object_country\": \"CN\", \"raw_excerpt\": \"exact quote\"}]\\nPredicate must be one of: SUPPLIES, MANUFACTURES, SOURCES_FROM, OWNS, PARTNERS_WITH, SHIPS_TO\\nIf no relationships found return: []`;\n\nreturn [{ json: { prompt, company: ctx.company, source_url: ctx.url, queue_id: ctx.queue_id, tier: ctx.tier, config } }];"
+        "jsCode": "const page = $input.first().json;\nconst ctx = $('Collect Unique URLs').first().json;\nconst config = $('Build Config Map').first().json.config;\nconst max_claims = parseInt(config.max_claims_per_batch || '5');\n\nlet raw_text = '';\ntry {\n  const body = page?.body || page?.data || '';\n  if (typeof body === 'string' && body.length > 0) {\n    raw_text = body.replace(/<[^>]+>/g, ' ').replace(/\\s+/g, ' ').trim();\n  }\n} catch(e) {}\nif (!raw_text || raw_text.length < 50) raw_text = ctx.snippet || ctx.title || '';\nraw_text = raw_text.substring(0, 3000);\n\nconst company = config.seed_company || ctx.company || 'Unknown';\nconst prompt = `Extract supply chain relationships involving \"${company}\" from the following web content.\n\nSource URL: ${ctx.url}\nContent: ${raw_text}\n\nReturn a JSON object with this EXACT structure (no markdown):\n{\"claims\": [{\"subject\": \"Company Name\", \"predicate\": \"SUPPLIES|BUYS_FROM|MANUFACTURES|DISTRIBUTES|PARTNERS_WITH|CERTIFIES|LOCATED_IN\", \"object\": \"Other Company or Product or Location\", \"confidence\": 0.0-1.0, \"source_url\": \"${ctx.url}\"}]}\n\nRules:\n- subject: the company/organization that is the source of the relationship\n- predicate: one of the exact strings above\n- object: the target company, product, material, or location\n- confidence: how certain you are (0.5-1.0)\n- Only include claims with confidence >= 0.5\n- Max ${max_claims} claims\n- If no supply chain relationships found, return: {\"claims\": []}`;\n\nreturn [{ json: { prompt, company, url: ctx.url, config } }];"
       },
       "id": "build-extract-prompt",
       "name": "Build Extract Prompt",
@@ -315,7 +293,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const resp = $input.first().json;\nconst ctx = $('Build Extract Prompt').first().json;\n\nlet claims = [];\ntry {\n  let content = resp?.choices?.[0]?.message?.content || '[]';\n  content = content.replace(/^```(?:json)?\\s*/i, '').replace(/\\s*```$/i, '').trim();\n  claims = JSON.parse(content);\n  if (!Array.isArray(claims)) claims = [];\n} catch(e) { claims = []; }\n\nreturn claims.map(c => ({\n  json: {\n    subject: c.subject || '',\n    predicate: c.predicate || 'SUPPLIES',\n    object: c.object || '',\n    subject_country: c.subject_country || null,\n    object_country: c.object_country || null,\n    raw_excerpt: c.raw_excerpt || '',\n    source_url: ctx.source_url,\n    tier: ctx.tier + 1,\n    queue_id: ctx.queue_id\n  }\n})).filter(c => c.json.subject && c.json.object);"
+        "jsCode": "const resp = $input.first().json;\nconst ctx = $('Build Config Map').first().json;\nconst company = ctx.company;\n\nlet claims = [];\ntry {\n  let content = resp?.choices?.[0]?.message?.content || '{}';\n  // Strip markdown code blocks\n  content = content.replace(/^```(?:json)?\\s*/i, '').replace(/\\s*```$/i, '').trim();\n  const parsed = JSON.parse(content);\n  // Handle both {\"claims\": [...]} and [...] formats\n  if (Array.isArray(parsed)) {\n    claims = parsed;\n  } else if (parsed.claims && Array.isArray(parsed.claims)) {\n    claims = parsed.claims;\n  }\n} catch(e) { claims = []; }\n\nconst confidence_threshold = parseFloat(ctx.config?.confidence_threshold || '0.5');\n\nreturn claims\n  .filter(c => c.subject && c.object && (c.confidence || 0) >= confidence_threshold)\n  .map(c => ({\n    json: {\n      subject: c.subject || company,\n      predicate: c.predicate || 'SUPPLIES',\n      object: c.object,\n      confidence: c.confidence || 0.7,\n      source_url: c.source_url || resp?.choices?.[0]?.message?.content?.slice(0,50) || '',\n      raw_text: '',\n      tier: 1\n    }\n  }));"
       },
       "id": "parse-claims",
       "name": "Parse Claims",
@@ -329,9 +307,9 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "INSERT INTO claims (subject, predicate, object, subject_country, object_country, raw_text, source_url, tier, validation_status) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pending') ON CONFLICT DO NOTHING",
+        "query": "INSERT INTO claims (subject, predicate, object, confidence, raw_text, source_url, tier, validation_status) VALUES ($1, $2, $3, $4::float, $5, $6, $7::int, 'pending') ON CONFLICT DO NOTHING",
         "options": {
-          "queryReplacement": "={{ [$json.subject, $json.predicate, $json.object, $json.subject_country, $json.object_country, $json.raw_excerpt, $json.source_url, $json.tier] }}"
+          "queryReplacement": "={{ [$json.subject, $json.predicate, $json.object, $json.confidence || 0.7, $json.raw_text || '', $json.source_url || '', $json.tier || 1] }}"
         }
       },
       "id": "insert-claims",
@@ -362,7 +340,7 @@
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
       "position": [
-        3080,
+        3200,
         0
       ],
       "credentials": {
@@ -371,6 +349,19 @@
           "name": "supplylens-pg"
         }
       }
+    },
+    {
+      "parameters": {
+        "mode": "append"
+      },
+      "id": "merge-done",
+      "name": "Merge Before Done",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        2970,
+        0
+      ]
     }
   ],
   "connections": {
@@ -447,6 +438,11 @@
             "node": "Build Search Queries",
             "type": "main",
             "index": 0
+          },
+          {
+            "node": "Merge Before Done",
+            "type": "main",
+            "index": 1
           }
         ],
         []
@@ -478,14 +474,14 @@
       "main": [
         [
           {
-            "node": "Fetch Page Content",
+            "node": "Prepare Page Content",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Fetch Page Content": {
+    "Prepare Page Content": {
       "main": [
         [
           {
@@ -533,7 +529,7 @@
       "main": [
         [
           {
-            "node": "Mark Queue Done",
+            "node": "Merge Before Done",
             "type": "main",
             "index": 0
           }
@@ -543,6 +539,17 @@
     "Mark Queue Done": {
       "main": [
         []
+      ]
+    },
+    "Merge Before Done": {
+      "main": [
+        [
+          {
+            "node": "Mark Queue Done",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     }
   },
